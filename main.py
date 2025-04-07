@@ -17,7 +17,7 @@ def get_gradle_command():
 
 # 运行 shell 命令
 def run_command(command, cwd=None):
-    process = subprocess.Popen(command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process = subprocess.Popen(command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
     stdout, stderr = process.communicate()
 
     if process.returncode != 0:
@@ -79,7 +79,7 @@ def build_flavor(flavor, project_dir, output_dir, progress_bar, log_signal):
     start_time = time.time()
 
     process = subprocess.Popen(build_command, shell=True, cwd=project_dir,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
 
     stdout_lines = []
     stderr_lines = []
