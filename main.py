@@ -1,242 +1,202 @@
 import os
-import platform
 import subprocess
-import threading
+import shutil
 import sys
 import time
-import shutil
-from tqdm import tqdm  # 进度条库
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget, QPushButton, QFileDialog, QLineEdit, QTextEdit
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget, QPushButton, QFileDialog, QLineEdit, QTextEdit, QLabel
+from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtGui import QTextCursor, QColor, QTextCharFormat
+from datetime import datetime
 
-
-# 获取 Gradle 命令
 def get_gradle_command():
-    return "gradlew.bat" if platform.system() == "Windows" else "./gradlew"
+    return "gradlew.bat" if os.name == "nt" else "./gradlew"
+
+# 线程安全日志管理
+class Logger:
+    def __init__(self, log_signal):
+        self.log_signal = log_signal
+        self.log_file = f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    def info(self, msg):
+        self._output(msg, "black")
+
+    def warn(self, msg):
+        self._output(f"⚠️ {msg}", "orange")
+
+    def error(self, msg):
+        self._output(f"❌ {msg}", "red")
+
+    def _output(self, msg, color):
+        now = time.strftime("[%H:%M:%S] ")
+        log_line = now + msg
+        self.log_signal.emit((log_line, color))
+        with open(self.log_file, "a", encoding="utf-8") as f:
+            f.write(log_line + "\n")
 
 
-# 运行 shell 命令
-def run_command(command, cwd=None):
-    process = subprocess.Popen(command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
+def run_command(command, cwd, logger):
+    process = subprocess.Popen(command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, encoding='utf-8', errors='ignore')
     stdout, stderr = process.communicate()
 
     if process.returncode != 0:
-        print(f"❌ 发生错误: {stderr.strip()}")
-        sys.exit(1)
-
+        logger.error(stderr.strip())
+        raise Exception(stderr.strip())
     return stdout.strip()
 
 
-# 清理 Gradle 缓存，防止打包失败
-def clean_build(project_dir):
-    print("\n🧹 清理旧的构建文件...")
+def clean_build(project_dir, logger):
     build_path = os.path.join(project_dir, "app", "build")
     if os.path.exists(build_path):
+        logger.info("🧹 清理旧构建...")
         shutil.rmtree(build_path)
 
 
-# 检查是否有未提交的更改，并处理
-def handle_git_conflict(project_dir):
-    print("\n🔍 检查是否有未提交的更改...")
-    status_output = run_command("git status --porcelain", cwd=project_dir)
-
-    if "app/proguardMapping.txt" in status_output:
-        print("\n⚠️ 检测到 app/proguardMapping.txt 有未提交的更改！")
-        print("\n🧹 丢弃本地修改...")
-        run_command("git checkout -- app/proguardMapping.txt", cwd=project_dir)
-
-    # 检查是否有未提交的更改，如果有，则执行 git stash
-    if status_output:
-        print("\n🧳 存储未提交的更改...")
-        run_command("git stash", cwd=project_dir)
-
-
-# 切换 Git 分支，自动处理未提交的更改
-def checkout_branch(branch_name, project_dir):
+def checkout_branch(branch_name, project_dir, logger):
     if branch_name:
-        print(f"\n🚀 切换到分支 {branch_name}...")
-        handle_git_conflict(project_dir)
-        run_command("git fetch --all", cwd=project_dir)
-        run_command(f"git checkout {branch_name}", cwd=project_dir)
-        run_command("git pull", cwd=project_dir)
-
-        # 恢复之前存储的更改
-        status_output = run_command("git status --porcelain", cwd=project_dir)
-        if status_output:
-            print("\n🔄 恢复存储的更改...")
-            run_command("git stash pop", cwd=project_dir)
+        logger.info(f"🚀 切换分支: {branch_name}")
+        run_command("git fetch --all", cwd=project_dir, logger=logger)
+        run_command(f"git checkout {branch_name}", cwd=project_dir, logger=logger)
+        run_command("git pull", cwd=project_dir, logger=logger)
 
 
-# 构建单个渠道
-def build_flavor(flavor, project_dir, output_dir, progress_bar, log_signal):
-    print(f"\n🚀 开始构建 {flavor} 版本...")
-
+def build_flavor(flavor, project_dir, output_dir, logger):
+    logger.info(f"🚀 开始构建 {flavor} ...")
     gradle_cmd = get_gradle_command()
-    build_command = f"{gradle_cmd} assemble{flavor.capitalize()}Release --rerun-tasks --parallel --configuration-cache --daemon"
-
-    log_signal.emit(f"🛠️ 执行命令: {build_command}")
+    command = f"{gradle_cmd} assemble{flavor.capitalize()}Release --parallel --configuration-cache --build-cache --daemon --no-daemon --no-scan --no-watch-fs --offline"
+    logger.info(f"执行命令: {command}")
 
     start_time = time.time()
 
-    process = subprocess.Popen(build_command, shell=True, cwd=project_dir,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
+    process = subprocess.Popen(command, shell=True, cwd=project_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, encoding='utf-8', errors='ignore')
 
-    stdout_lines = []
-    stderr_lines = []
-
-    # 读取 Gradle 输出并实时打印
     for line in process.stdout:
-        log_signal.emit(line.strip())
-        stdout_lines.append(line.strip())
+        logger.info(line.strip())
 
     for line in process.stderr:
-        log_signal.emit("🚨 Gradle 错误:" + line.strip())
-        stderr_lines.append(line.strip())
+        logger.error(line.strip())
 
     process.wait()
-    elapsed_time = time.time() - start_time
+    duration = time.time() - start_time
 
     if process.returncode != 0:
-        log_signal.emit("\n❌ Gradle 构建失败，完整错误如下:")
-        log_signal.emit("\n".join(stderr_lines))
-        sys.exit(1)
+        raise Exception("Gradle 构建失败")
 
-    # 复制 APK
     apk_path = os.path.join(project_dir, "app", "build", "outputs", "apk", flavor, "release")
     if os.path.exists(apk_path):
-        for file in os.listdir(apk_path):
-            if file.endswith(".apk"):
-                src = os.path.join(apk_path, file)
-                dst = os.path.join(output_dir, file)
-
-                # **解决 WinError 183（目标文件已存在，无法覆盖）**
-                if os.path.exists(dst):
-                    log_signal.emit(f"\n⚠️ 目标文件已存在，删除旧文件: {dst}")
-                    os.remove(dst)
-
-                shutil.move(src, dst)  # 使用 shutil.move 避免 WinError 183
-                log_signal.emit(f"\n✅ APK 生成: {dst} (⏱ {elapsed_time:.2f} 秒)")
-
-                progress_bar.update(1)
+        for f in os.listdir(apk_path):
+            if f.endswith(".apk"):
+                src = os.path.join(apk_path, f)
+                dst = os.path.join(output_dir, f)
+                shutil.move(src, dst)
+                logger.info(f"✅ APK 完成: {dst} (耗时 {duration:.2f}s)")
     else:
-        log_signal.emit(f"\n❌ 错误: {apk_path} 不存在，打包失败？")
-        sys.exit(1)
-
-
-# 并行构建所有渠道
-def build_apk_parallel(flavors, project_dir, output_dir, log_signal):
-    progress_bar = tqdm(total=len(flavors), desc="构建进度",
-                        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} {elapsed} < {remaining}")
-
-    threads = []
-
-    for flavor in flavors:
-        thread = threading.Thread(target=build_flavor, args=(flavor, project_dir, output_dir, progress_bar, log_signal))
-        thread.start()
-        threads.append(thread)
-
-    for thread in threads:
-        thread.join()
-
-    progress_bar.close()
-
-
-# PyQt5 界面
-class PackagingToolUI(QWidget):
-    log_signal = pyqtSignal(str)
-
-    def __init__(self):
-        super().__init__()
-
-        self.setWindowTitle("Android 多渠道打包工具")
-        self.setGeometry(100, 100, 600, 400)
-
-        layout = QVBoxLayout()
-
-        self.project_path = QLineEdit(self)
-        self.project_path.setPlaceholderText("选择 Android 项目目录")
-        layout.addWidget(self.project_path)
-
-        self.output_path = QLineEdit(self)
-        self.output_path.setPlaceholderText("选择 APK 输出目录")
-        layout.addWidget(self.output_path)
-
-        self.flavors_input = QLineEdit(self)
-        self.flavors_input.setPlaceholderText("输入渠道名称，逗号分隔")
-        layout.addWidget(self.flavors_input)
-
-        self.branch_input = QLineEdit(self)
-        self.branch_input.setPlaceholderText("输入 Git 分支名称")
-        layout.addWidget(self.branch_input)
-
-        self.select_project_button = QPushButton("选择项目目录", self)
-        self.select_project_button.clicked.connect(self.select_project_directory)
-        layout.addWidget(self.select_project_button)
-
-        self.select_output_button = QPushButton("选择输出目录", self)
-        self.select_output_button.clicked.connect(self.select_output_directory)
-        layout.addWidget(self.select_output_button)
-
-        self.start_button = QPushButton("开始打包", self)
-        self.start_button.clicked.connect(self.start_build)
-        layout.addWidget(self.start_button)
-
-        # 日志输出窗口
-        self.log_output = QTextEdit(self)
-        self.log_output.setPlaceholderText("显示日志...")
-        self.log_output.setReadOnly(True)  # 设置为只读
-        layout.addWidget(self.log_output)
-
-        self.setLayout(layout)
-
-        self.log_signal.connect(self.update_log)
-
-    def select_project_directory(self):
-        directory = QFileDialog.getExistingDirectory(self, "选择项目目录")
-        if directory:
-            self.project_path.setText(directory)
-
-    def select_output_directory(self):
-        directory = QFileDialog.getExistingDirectory(self, "选择输出目录")
-        if directory:
-            self.output_path.setText(directory)
-
-    def start_build(self):
-        project_dir = self.project_path.text()
-        output_dir = self.output_path.text()
-        flavors = self.flavors_input.text().split(',')
-        branch_name = self.branch_input.text()
-
-        # 使用 QThread 处理耗时任务
-        self.build_thread = BuildThread(branch_name, project_dir, output_dir, flavors, self.log_signal)
-        self.build_thread.start()
-
-    def update_log(self, log_text):
-        self.log_output.append(log_text)
+        logger.error(f"{apk_path} 不存在")
 
 
 class BuildThread(QThread):
-    def __init__(self, branch_name, project_dir, output_dir, flavors, log_signal):
+    log_signal = pyqtSignal(tuple)
+
+    def __init__(self, project_dir, output_dir, flavors, branch_name):
         super().__init__()
-        self.branch_name = branch_name
         self.project_dir = project_dir
         self.output_dir = output_dir
         self.flavors = flavors
-        self.log_signal = log_signal
+        self.branch_name = branch_name
 
     def run(self):
-        checkout_branch(self.branch_name, self.project_dir)
-        clean_build(self.project_dir)
-        build_apk_parallel(self.flavors, self.project_dir, self.output_dir, self.log_signal)
+        logger = Logger(self.log_signal)
+        try:
+            clean_build(self.project_dir, logger)  # 可以选择不调用 clean_build 来进一步加速
+            checkout_branch(self.branch_name, self.project_dir, logger)
+            for flavor in self.flavors:
+                build_flavor(flavor, self.project_dir, self.output_dir, logger)
+            logger.info("🎉 所有渠道打包完成")
+        except Exception as e:
+            logger.error(str(e))
 
 
-# 主函数
-def main():
+class PackagingToolUI(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Android 多渠道打包工具(V1.0.1)")
+        self.setGeometry(100, 100, 700, 600)
+
+        layout = QVBoxLayout()
+
+        self.project_path_edit = QLineEdit()
+        btn1 = QPushButton("选择项目路径")
+        btn1.clicked.connect(self.choose_project)
+
+        self.output_path_edit = QLineEdit()
+        btn2 = QPushButton("选择输出路径")
+        btn2.clicked.connect(self.choose_output)
+
+        self.flavors_edit = QLineEdit()
+        self.flavors_edit.setPlaceholderText("输入渠道名, 多个逗号分隔")
+
+        self.branch_edit = QLineEdit()
+        self.branch_edit.setPlaceholderText("输入Git分支")
+
+        self.log_edit = QTextEdit()
+        self.log_edit.setReadOnly(True)
+
+        btn3 = QPushButton("开始极速打包")
+        btn3.clicked.connect(self.start_build)
+
+        layout.addWidget(QLabel("项目路径"))
+        layout.addWidget(self.project_path_edit)
+        layout.addWidget(btn1)
+        layout.addWidget(QLabel("输出路径"))
+        layout.addWidget(self.output_path_edit)
+        layout.addWidget(btn2)
+        layout.addWidget(QLabel("渠道名"))
+        layout.addWidget(self.flavors_edit)
+        layout.addWidget(QLabel("Git分支(不填则默认当前项目分支)"))
+        layout.addWidget(self.branch_edit)
+        layout.addWidget(btn3)
+        layout.addWidget(self.log_edit)
+
+        self.setLayout(layout)
+
+    def choose_project(self):
+        path = QFileDialog.getExistingDirectory(self, "选择项目路径")
+        if path:
+            self.project_path_edit.setText(path)
+
+    def choose_output(self):
+        path = QFileDialog.getExistingDirectory(self, "选择输出路径")
+        if path:
+            self.output_path_edit.setText(path)
+
+    def start_build(self):
+        project_dir = self.project_path_edit.text()
+        output_dir = self.output_path_edit.text()
+        flavors = [f.strip() for f in self.flavors_edit.text().split(",") if f.strip()]
+        branch_name = self.branch_edit.text()
+
+        if not os.path.exists(project_dir) or not os.path.exists(output_dir) or not flavors:
+            self.append_log(("参数不完整！", "red"))
+            return
+
+        self.thread = BuildThread(project_dir, output_dir, flavors, branch_name)
+        self.thread.log_signal.connect(self.append_log)
+        self.thread.start()
+
+    def append_log(self, log):
+        text, color = log
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        cursor = self.log_edit.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(text + "\n", fmt)
+        self.log_edit.setTextCursor(cursor)
+        self.log_edit.ensureCursorVisible()
+
+
+if __name__ == '__main__':
     app = QApplication(sys.argv)
-    ui = PackagingToolUI()
-    ui.show()
+    win = PackagingToolUI()
+    win.show()
     sys.exit(app.exec_())
-
-
-if __name__ == "__main__":
-    main()
