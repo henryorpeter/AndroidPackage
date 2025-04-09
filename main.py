@@ -3,9 +3,9 @@ import subprocess
 import shutil
 import sys
 import time
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget, QPushButton, QFileDialog, QLineEdit, QTextEdit, QLabel
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget, QPushButton, QFileDialog, QLineEdit, QTextEdit, QLabel, QHBoxLayout
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
-from PyQt5.QtGui import QTextCursor, QColor, QTextCharFormat
+from PyQt5.QtGui import QTextCursor, QColor, QTextCharFormat, QFont
 from datetime import datetime
 
 def get_gradle_command():
@@ -15,7 +15,6 @@ def get_gradle_command():
 class Logger:
     def __init__(self, log_signal):
         self.log_signal = log_signal
-        self.log_file = f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
     def info(self, msg):
         self._output(msg, "black")
@@ -30,8 +29,6 @@ class Logger:
         now = time.strftime("[%H:%M:%S] ")
         log_line = now + msg
         self.log_signal.emit((log_line, color))
-        with open(self.log_file, "a", encoding="utf-8") as f:
-            f.write(log_line + "\n")
 
 
 def run_command(command, cwd, logger):
@@ -52,9 +49,16 @@ def clean_build(project_dir, logger):
         shutil.rmtree(build_path)
 
 
+def handle_git_conflict(project_dir, logger):
+    status_output = run_command("git status --porcelain", cwd=project_dir, logger=logger)
+    if "app/proguardMapping.txt" in status_output:
+        run_command("git checkout -- app/proguardMapping.txt", cwd=project_dir, logger=logger)
+
+
 def checkout_branch(branch_name, project_dir, logger):
     if branch_name:
         logger.info(f"🚀 切换分支: {branch_name}")
+        handle_git_conflict(project_dir, logger)
         run_command("git fetch --all", cwd=project_dir, logger=logger)
         run_command(f"git checkout {branch_name}", cwd=project_dir, logger=logger)
         run_command("git pull", cwd=project_dir, logger=logger)
@@ -123,28 +127,43 @@ class PackagingToolUI(QWidget):
         self.setWindowTitle("Android 多渠道打包工具(V1.0.1)")
         self.setGeometry(100, 100, 700, 600)
 
+        # 整体布局
         layout = QVBoxLayout()
 
+        # 设置字体
+        font = QFont("Arial", 10)
+        self.setFont(font)
+
+        # 项目路径输入框及按钮
         self.project_path_edit = QLineEdit()
+        self.project_path_edit.setPlaceholderText("选择项目路径")
         btn1 = QPushButton("选择项目路径")
         btn1.clicked.connect(self.choose_project)
 
+        # 输出路径输入框及按钮
         self.output_path_edit = QLineEdit()
+        self.output_path_edit.setPlaceholderText("选择输出路径")
         btn2 = QPushButton("选择输出路径")
         btn2.clicked.connect(self.choose_output)
 
+        # 渠道名输入框
         self.flavors_edit = QLineEdit()
         self.flavors_edit.setPlaceholderText("输入渠道名, 多个逗号分隔")
 
+        # Git 分支输入框
         self.branch_edit = QLineEdit()
-        self.branch_edit.setPlaceholderText("输入Git分支")
+        self.branch_edit.setPlaceholderText("输入Git分支 (留空则使用当前分支)")
 
+        # 日志框
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
 
+        # 开始打包按钮
         btn3 = QPushButton("开始极速打包")
+        btn3.setStyleSheet("background-color: #4CAF50; color: white; border-radius: 5px; padding: 10px; font-weight: bold;")
         btn3.clicked.connect(self.start_build)
 
+        # 布局管理
         layout.addWidget(QLabel("项目路径"))
         layout.addWidget(self.project_path_edit)
         layout.addWidget(btn1)
@@ -153,9 +172,10 @@ class PackagingToolUI(QWidget):
         layout.addWidget(btn2)
         layout.addWidget(QLabel("渠道名"))
         layout.addWidget(self.flavors_edit)
-        layout.addWidget(QLabel("Git分支(不填则默认当前项目分支)"))
+        layout.addWidget(QLabel("Git分支"))
         layout.addWidget(self.branch_edit)
         layout.addWidget(btn3)
+        layout.addWidget(QLabel("构建日志"))
         layout.addWidget(self.log_edit)
 
         self.setLayout(layout)
