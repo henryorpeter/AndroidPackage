@@ -100,17 +100,49 @@ def build_flavor(flavor, project_dir, output_dir, logger):
         logger.error(f"{apk_path} 不存在")
 
 def find_flavors(project_dir):
+    """
+    万能解析Android项目的渠道配置
+    支持以下写法：
+    1. 直接定义: flavorName { ... }
+    2. 动态创建: create("flavorName") { ... }
+    3. 带引号定义: 'flavor-name' { ... }
+    4. 多维度配置: missingDimensionStrategy 'dimension', 'flavor'
+    5. 任意缩进和换行格式
+    """
     gradle_file = os.path.join(project_dir, 'app', 'build.gradle')
     if not os.path.exists(gradle_file):
         return []
+
     with open(gradle_file, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    flavors = []
-    if 'productFlavors' in content:
-        product_flavors_section = content.split('productFlavors')[1]
-        flavors = re.findall(r'(\w+)\s*\{[^}]*\}', product_flavors_section)
-    return flavors
+    # 预处理：移除注释和字符串内容（保留结构）
+    content = re.sub(r'//.*', '', content)  # 移除单行注释
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)  # 移除块注释
+    content = re.sub(r'"(?:\\"|[^"])*"', '""', content)  # 替换字符串内容为空白
+    content = re.sub(r"'(?:\\'|[^'])*'", "''", content)  # 替换字符串内容为空白
+
+    flavors = set()  # 使用集合自动去重
+
+    # 匹配所有可能的渠道定义模式
+    patterns = [
+        # 标准定义: flavorName { ... }
+        r'(?:^|\s)([\w-]+)\s*\{',
+        # 动态创建: create("flavorName") 或 create('flavorName')
+        r'create\(\s*["\']?([\w-]+)["\']?\s*\)',
+        # 带引号定义: 'flavor-name' { ... }
+        r'["\']([\w-]+)["\']\s*\{',
+        # 维度策略中的渠道引用（辅助识别）
+        r"missingDimensionStrategy\s+.+,\s*['\"]([\w-]+)['\"]"
+    ]
+
+    for pattern in patterns:
+        for match in re.finditer(pattern, content, re.MULTILINE):
+            group = match.group(1) if match.lastindex == 1 else match.group(2)
+            if group and len(group) > 1:  # 过滤单个字符的误匹配
+                flavors.add(group)
+
+    return sorted(flavors) if flavors else []
 
 class BuildThread(QThread):
     log_signal = pyqtSignal(tuple)
