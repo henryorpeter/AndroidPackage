@@ -156,7 +156,7 @@ class PackagingToolUI(QWidget):
         self.setWindowTitle("Android 多渠道打包工具(V2.0)")
 
         # ========= 新增图标设置代码 =========
-        icon_path = "images.jpg"  # 或使用绝对路径
+        icon_path = "images.png"  # 或使用绝对路径
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         else:
