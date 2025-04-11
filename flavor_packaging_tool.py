@@ -4,9 +4,9 @@ import subprocess
 import sys
 import time
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget, QPushButton, QFileDialog, QLineEdit, QTextEdit, QLabel, \
-    QCheckBox, QGridLayout
+    QCheckBox, QGridLayout, QScrollArea
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
-from PyQt5.QtGui import QColor, QTextCharFormat, QFont, QTextCursor
+from PyQt5.QtGui import QColor, QTextCharFormat, QFont, QTextCursor, QIcon
 import re
 
 def get_gradle_command():
@@ -100,15 +100,6 @@ def build_flavor(flavor, project_dir, output_dir, logger):
         logger.error(f"{apk_path} 不存在")
 
 def find_flavors(project_dir):
-    """
-    万能解析Android项目的渠道配置
-    支持以下写法：
-    1. 直接定义: flavorName { ... }
-    2. 动态创建: create("flavorName") { ... }
-    3. 带引号定义: 'flavor-name' { ... }
-    4. 多维度配置: missingDimensionStrategy 'dimension', 'flavor'
-    5. 任意缩进和换行格式
-    """
     gradle_file = os.path.join(project_dir, 'app', 'build.gradle')
     if not os.path.exists(gradle_file):
         return []
@@ -116,30 +107,24 @@ def find_flavors(project_dir):
     with open(gradle_file, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # 预处理：移除注释和字符串内容（保留结构）
-    content = re.sub(r'//.*', '', content)  # 移除单行注释
-    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)  # 移除块注释
-    content = re.sub(r'"(?:\\"|[^"])*"', '""', content)  # 替换字符串内容为空白
-    content = re.sub(r"'(?:\\'|[^'])*'", "''", content)  # 替换字符串内容为空白
+    content = re.sub(r'//.*', '', content)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    content = re.sub(r'"(?:\\"|[^"])*"', '""', content)
+    content = re.sub(r"'(?:\\'|[^'])*'", "''", content)
 
-    flavors = set()  # 使用集合自动去重
+    flavors = set()
 
-    # 匹配所有可能的渠道定义模式
     patterns = [
-        # 标准定义: flavorName { ... }
         r'(?:^|\s)([\w-]+)\s*\{',
-        # 动态创建: create("flavorName") 或 create('flavorName')
         r'create\(\s*["\']?([\w-]+)["\']?\s*\)',
-        # 带引号定义: 'flavor-name' { ... }
         r'["\']([\w-]+)["\']\s*\{',
-        # 维度策略中的渠道引用（辅助识别）
         r"missingDimensionStrategy\s+.+,\s*['\"]([\w-]+)['\"]"
     ]
 
     for pattern in patterns:
         for match in re.finditer(pattern, content, re.MULTILINE):
             group = match.group(1) if match.lastindex == 1 else match.group(2)
-            if group and len(group) > 1:  # 过滤单个字符的误匹配
+            if group and len(group) > 1:
                 flavors.add(group)
 
     return sorted(flavors) if flavors else []
@@ -168,12 +153,21 @@ class BuildThread(QThread):
 class PackagingToolUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Android 多渠道打包工具(V1.0.1)")
+        self.setWindowTitle("Android 多渠道打包工具(V2.0)")
+
+        # ========= 新增图标设置代码 =========
+        icon_path = "images.jpg"  # 或使用绝对路径
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            print(f"图标文件 {icon_path} 不存在")
+        # ================================
+
         self.setGeometry(100, 100, 700, 600)
         self.selected_flavors = []
 
-        # 主布局
-        layout = QVBoxLayout()
+        layout = QGridLayout()
+        self.setLayout(layout)
 
         # 项目路径
         self.project_path_edit = QLineEdit()
@@ -187,10 +181,16 @@ class PackagingToolUI(QWidget):
         btn_output = QPushButton("选择输出路径")
         btn_output.clicked.connect(self.choose_output)
 
-        # 渠道选择容器
-        self.flavor_container = QWidget()
-        self.flavor_layout = QGridLayout(self.flavor_container)
-        self.flavor_layout.addWidget(QLabel("选择渠道："), 0, 0, 1, 5)
+        # 滚动区域设置
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFixedHeight(250)
+
+        # 滚动内容容器
+        self.scroll_content = QWidget()
+        self.scroll_area.setWidget(self.scroll_content)
+        self.checkbox_grid = QGridLayout(self.scroll_content)
+        self.checkbox_grid.addWidget(QLabel("选择渠道："), 0, 0, 1, 5)
 
         # Git分支
         self.branch_edit = QLineEdit()
@@ -205,26 +205,26 @@ class PackagingToolUI(QWidget):
         btn_build.setStyleSheet("background-color: #4CAF50; color: white; padding: 10px;")
         btn_build.clicked.connect(self.start_build)
 
-        # 组装界面
-        layout.addWidget(QLabel("项目路径"))
-        layout.addWidget(self.project_path_edit)
-        layout.addWidget(btn_project)
-        layout.addWidget(QLabel("输出路径"))
-        layout.addWidget(self.output_path_edit)
-        layout.addWidget(btn_output)
-        layout.addWidget(self.flavor_container)
-        layout.addWidget(QLabel("Git分支"))
-        layout.addWidget(self.branch_edit)
-        layout.addWidget(btn_build)
-        layout.addWidget(QLabel("构建日志"))
-        layout.addWidget(self.log_edit)
+        # 布局设置
+        layout.addWidget(QLabel("项目路径"), 0, 0)
+        layout.addWidget(self.project_path_edit, 0, 1)
+        layout.addWidget(btn_project, 0, 2)
 
-        self.setLayout(layout)
+        layout.addWidget(QLabel("输出路径"), 1, 0)
+        layout.addWidget(self.output_path_edit, 1, 1)
+        layout.addWidget(btn_output, 1, 2)
 
-    def choose_output(self):
-        path = QFileDialog.getExistingDirectory(self, "选择输出路径")
-        if path:
-            self.output_path_edit.setText(path)
+        layout.addWidget(self.scroll_area, 2, 0, 1, 3)
+
+        layout.addWidget(QLabel("Git分支"), 3, 0)
+        layout.addWidget(self.branch_edit, 3, 1, 1, 2)
+
+        layout.addWidget(btn_build, 4, 0, 1, 3)
+        layout.addWidget(QLabel("构建日志"), 5, 0, 1, 3)
+        layout.addWidget(self.log_edit, 6, 0, 1, 3)
+
+        layout.setRowStretch(2, 1)
+        layout.setRowStretch(6, 3)
 
     def choose_project(self):
         try:
@@ -235,30 +235,39 @@ class PackagingToolUI(QWidget):
             self.project_path_edit.setText(path)
             flavors = find_flavors(path)
 
-            # 清空旧复选框
-            for child in self.flavor_container.findChildren(QCheckBox):
-                child.deleteLater()
+            # 清理旧复选框
+            for i in reversed(range(self.checkbox_grid.count())):
+                widget = self.checkbox_grid.itemAt(i).widget()
+                if widget and isinstance(widget, QCheckBox):
+                    widget.deleteLater()
 
-            # 添加新复选框
+            # 添加新复选框（关键修改点）
             if flavors:
                 for i, flavor in enumerate(flavors):
-                    cb = QCheckBox(flavor, self.flavor_container)
+                    cb = QCheckBox(flavor, self.scroll_content)  # 设置父控件为滚动内容区
                     cb.toggled.connect(self.update_flavors)
-                    row = (i // 5) + 1  # 从第1行开始
+                    row = (i // 5) + 1  # 从第二行开始
                     col = i % 5
-                    self.flavor_layout.addWidget(cb, row, col)
+                    self.checkbox_grid.addWidget(cb, row, col)
             else:
-                cb = QCheckBox("default", self.flavor_container)
-                self.flavor_layout.addWidget(cb, 1, 0)
+                cb = QCheckBox("default", self.scroll_content)
+                self.checkbox_grid.addWidget(cb, 1, 0)
 
             self.update_flavors()
 
         except Exception as e:
             self.append_log(("错误: " + str(e), "red"))
 
+    def choose_output(self):
+        path = QFileDialog.getExistingDirectory(self, "选择输出路径")
+        if path:
+            self.output_path_edit.setText(path)
+
     def update_flavors(self):
+        # 关键修改点：从滚动内容区查找复选框
         self.selected_flavors = [
-            cb.text() for cb in self.flavor_container.findChildren(QCheckBox)
+            cb.text()
+            for cb in self.scroll_content.findChildren(QCheckBox)
             if cb.isChecked()
         ]
         print("当前选中的渠道:", self.selected_flavors)
