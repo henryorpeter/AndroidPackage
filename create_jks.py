@@ -119,6 +119,9 @@ def create_jks(package_name, chinese_package_name, save_path, log_display):
         with open(info_file, "w", encoding="utf-8") as f:
             f.write(info_content)
 
+        # 成功后弹出提示框
+        QMessageBox.information(None, "成功", f"{package_name}.jks 生成成功！", QMessageBox.Ok)
+
     except subprocess.CalledProcessError as e:
         log_display.append(f"❌ 生成 JKS 失败: {e.stderr}")
         return

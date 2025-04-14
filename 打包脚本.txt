@@ -1,0 +1,3 @@
+xxx.ico-图标
+xxx.py-脚本代码
+pyinstaller --onefile --windowed --icon=xxx.png xxx.py
