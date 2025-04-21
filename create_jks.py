@@ -180,6 +180,7 @@ class JKSGeneratorApp(QWidget):
         create_jks(package_name, chinese_package_name, save_path, self.log_display)
         self.log_display.append("\n✅ JKS 生成完成！")
 
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = JKSGeneratorApp()
